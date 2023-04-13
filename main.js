@@ -4,14 +4,10 @@ let gl; // The webgl context.
 let surface; // A surface model
 let shProgram; // A shader program
 let spaceball; // A SimpleRotator object that lets the user rotate the view by mouse.
-
-let handlePosition = 0.0;
+let texture0, texture1;
+let video, background;
 
 const texturePoint = { x: 100, y: 400 };
-
-const deg2rad = (angle) => {
-  return (angle * Math.PI) / 180;
-};
 
 // Constructor
 function Model(name) {
@@ -43,6 +39,16 @@ function Model(name) {
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, this.count);
   };
+  this.DrawBG = function () {
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.iVertexBuffer);
+    gl.vertexAttribPointer(shProgram.iAttribVertex, 3, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(shProgram.iAttribVertex);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.iTextureBuffer);
+    gl.vertexAttribPointer(shProgram.iTextureCoords, 2, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(shProgram.iTextureCoords);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, this.count);
+  };
 }
 
 // Constructor
@@ -64,14 +70,9 @@ function ShaderProgram(name, program) {
   this.iDiffuseColor = -1;
   this.iSpecularColor = -1;
 
-  this.iShininess = -1;
-  this.iLightPosition = -1;
-  this.iLightVec = -1;
-
   this.iTextureCoords = -1;
-  this.iTextureU = -1;
-  this.iTextureAngle = -1;
-  this.iTexturePoint = -1;
+  this.itextureU = -1;
+  this.itexturePoint = -1;
 
   this.Use = function () {
     gl.useProgram(this.prog);
@@ -83,22 +84,76 @@ function ShaderProgram(name, program) {
  * way to draw with WebGL.  Here, the geometry is so simple that it doesn't matter.)
  */
 function draw() {
+  let spans = document.getElementsByClassName("sliderValue");
+
   gl.clearColor(0, 0, 0, 1);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
   /* Set the values of the projection transformation */
-  let projection = m4.perspective(Math.PI / 4, 1, 1, 12);
+  let projection = m4.orthographic(0, 1, 0, 1, -1, 1);
+  let convergence;
+  let eyeSeparation;
+  let ratio;
+  let fieldOfViev;
+  let near;
+
+  let top;
+  let bottom;
+  let left;
+  let right;
+  let far;
+
+  convergence = 2000.0;
+  convergence = document.getElementById("convergence").value;
+  spans[3].innerHTML = convergence;
+
+  eyeSeparation = 20;
+  eyeSeparation = document.getElementById("eyeSeparation").value;
+  spans[0].innerHTML = eyeSeparation;
+
+  ratio = 1.0;
+  fieldOfViev = 2;
+  fieldOfViev = document.getElementById("fieldOfViev").value;
+  spans[1].innerHTML = fieldOfViev;
+
+  near = 10.0;
+  near = document.getElementById("near").value - 0.0;
+  spans[2].innerHTML = near;
+  far = 20000.0;
+
+  top = near * Math.tan(fieldOfViev / 2.0);
+  bottom = -top;
+
+  let a = ratio * Math.tan(fieldOfViev / 2.0) * convergence;
+  let b = a - eyeSeparation / 2;
+  let c = a + eyeSeparation / 2;
+
+  left = (-b * near) / convergence;
+  right = (c * near) / convergence;
+
+  let projectionLeft = m4.orthographic(left, right, bottom, top, near, far);
+
+  left = (-c * near) / convergence;
+  right = (b * near) / convergence;
+
+  let projectionRight = m4.orthographic(left, right, bottom, top, near, far);
 
   /* Get the view matrix from the SimpleRotator object.*/
   let modelView = spaceball.getViewMatrix();
 
-  let rotateToPointZero = m4.axisRotation([1, 0, 0], 1.5);
+  let rotateToPointZero = m4.axisRotation([0.707, 0.707, 0], 0);
   let translateToPointZero = m4.translation(0, 0, -10);
+  let translateToLeft = m4.translation(-0.03, 0, -20);
+  let translateToRight = m4.translation(0.03, 0, -20);
 
+  let noRot = m4.multiply(
+    rotateToPointZero,
+    [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+  );
   let matAccum0 = m4.multiply(rotateToPointZero, modelView);
-  let matAccum1 = m4.multiply(translateToPointZero, matAccum0);
-  const modelViewInverse = m4.inverse(matAccum1, new Float32Array(16));
-  const normalMatrix = m4.transpose(modelViewInverse, new Float32Array(16));
+  let matAccum1 = m4.multiply(translateToPointZero, noRot);
+  const modelviewInverse = m4.inverse(matAccum1, new Float32Array(16));
+  const normalMatrix = m4.transpose(modelviewInverse, new Float32Array(16));
 
   /* Multiply the projection matrix times the modelview matrix to give the
      combined transformation matrix, and send that to the shader program. */
@@ -109,38 +164,41 @@ function draw() {
     false,
     modelViewProjection
   );
-
   gl.uniformMatrix4fv(shProgram.iNormalMatrix, false, normalMatrix);
 
-  gl.uniform3fv(shProgram.iLightPosition, lightCoordinates());
-  gl.uniform3fv(shProgram.iLightDirection, [1, 0, 0]);
-
-  gl.uniform3fv(shProgram.iLightVec, new Float32Array(3));
-
-  gl.uniform1f(shProgram.iShininess, 1.0);
-
-  gl.uniform3fv(shProgram.iAmbientColor, [0.5, 10, 0.4]);
+  gl.uniform3fv(shProgram.iAmbientColor, [0.5, 0, 0.4]);
   gl.uniform3fv(shProgram.iDiffuseColor, [1.3, 1.0, 0.0]);
   gl.uniform3fv(shProgram.iSpecularColor, [1.5, 1.0, 1.0]);
-
   /* Draw the six faces of a cube, with different colors. */
   gl.uniform4fv(shProgram.iColor, [1, 1, 0, 1]);
 
-  const angle = document.getElementById("rAngle").value;
-  gl.uniform1f(shProgram.iTextureAngle, deg2rad(+angle));
-
-  const u = deg2rad(texturePoint.x);
-  const v = deg2rad(texturePoint.y);
-
-  gl.uniform2fv(shProgram.iTexturePoint, [
-    a * (b - cos(u)) * sin(u) * cos(v),
-    a * (b - cos(u)) * sin(u) * sin(v),
-  ]);
+  gl.uniformMatrix4fv(shProgram.iModelViewMatrix, false, noRot);
+  gl.uniformMatrix4fv(shProgram.iProjectionMatrix, false, projection);
+  gl.bindTexture(gl.TEXTURE_2D, texture0);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+  background.DrawBG();
+  gl.uniform4fv(shProgram.iColor, [0, 0, 0, 1]);
 
   gl.activeTexture(gl.TEXTURE0);
-  gl.uniform1i(shProgram.iTextureU, 0);
+  gl.uniform1i(shProgram.itextureU, 0);
 
+  gl.bindTexture(gl.TEXTURE_2D, texture1);
+  gl.clear(gl.DEPTH_BUFFER_BIT);
+
+  let matAccumLeft = m4.multiply(translateToLeft, matAccum0);
+  gl.uniformMatrix4fv(shProgram.iModelViewMatrix, false, matAccumLeft);
+  gl.uniformMatrix4fv(shProgram.iProjectionMatrix, false, projectionLeft);
+  gl.colorMask(true, false, false, false);
   surface.Draw();
+  gl.clear(gl.DEPTH_BUFFER_BIT);
+
+  let matAccumRight = m4.multiply(translateToRight, matAccum0);
+  gl.uniformMatrix4fv(shProgram.iModelViewMatrix, false, matAccumRight);
+  gl.uniformMatrix4fv(shProgram.iProjectionMatrix, false, projectionRight);
+  gl.colorMask(false, true, true, false);
+  surface.Draw();
+
+  gl.colorMask(true, true, true, true);
 }
 
 let a = 0.5;
@@ -209,6 +267,8 @@ function initGL() {
     prog,
     "ModelViewProjectionMatrix"
   );
+  shProgram.iModelViewMatrix = gl.getUniformLocation(prog, "ModelViewMatrix");
+  shProgram.iProjectionMatrix = gl.getUniformLocation(prog, "ProjectionMatrix");
   shProgram.iColor = gl.getUniformLocation(prog, "color");
 
   shProgram.iNormal = gl.getAttribLocation(prog, "normal");
@@ -217,22 +277,22 @@ function initGL() {
   shProgram.iAmbientColor = gl.getUniformLocation(prog, "ambientColor");
   shProgram.iDiffuseColor = gl.getUniformLocation(prog, "diffuseColor");
   shProgram.iSpecularColor = gl.getUniformLocation(prog, "specularColor");
-
-  shProgram.iShininess = gl.getUniformLocation(prog, "shininess");
-
-  shProgram.iLightPosition = gl.getUniformLocation(prog, "lightPosition");
-  shProgram.iLightVec = gl.getUniformLocation(prog, "lightVec");
+  shProgram.iColor = gl.getUniformLocation(prog, "colorU");
 
   shProgram.iTextureCoords = gl.getAttribLocation(prog, "textureCoords");
-  shProgram.iTextureU = gl.getUniformLocation(prog, "textureU");
-  shProgram.iTextureAngle = gl.getUniformLocation(prog, "textureAngle");
-  shProgram.iTexturePoint = gl.getUniformLocation(prog, "texturePoint");
+  shProgram.itextureU = gl.getUniformLocation(prog, "textureU");
+  shProgram.itexturePoint = gl.getUniformLocation(prog, "texturePoint");
 
   surface = new Model("Surface");
   const { vertexList, textureList } = CreateSurfaceData();
   surface.BufferData(vertexList, textureList);
+  background = new Model("Back");
+  background.BufferData(
+    [0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0],
+    [1, 1, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1]
+  );
 
-  loadTexture();
+  LoadTexture();
 
   gl.enable(gl.DEPTH_TEST);
 }
@@ -268,14 +328,25 @@ function createProgram(gl, vShader, fShader) {
   return prog;
 }
 
+function loopDraw() {
+  draw();
+  window.requestAnimationFrame(loopDraw);
+}
+
 /**
  * initialization function that will be called when the page has loaded
  */
 function init() {
+
   let canvas;
   try {
     canvas = document.getElementById("webglcanvas");
     gl = canvas.getContext("webgl");
+    video = document.createElement("video");
+    video.setAttribute("autoplay", true);
+    window.vid = video;
+    getWebcam();
+    texture0 = CreateWebCamTexture();
     if (!gl) {
       throw "Browser does not support WebGL";
     }
@@ -296,7 +367,7 @@ function init() {
 
   spaceball = new TrackballRotator(canvas, draw, 0);
 
-  draw();
+  loopDraw();
 }
 
 const reDraw = () => {
@@ -305,78 +376,39 @@ const reDraw = () => {
   draw();
 };
 
-const loadTexture = () => {
+const LoadTexture = () => {
   const image = new Image();
   image.crossOrigin = "anonymous";
   image.src =
     "https://www.the3rdsequence.com/texturedb/download/255/texture/jpg/1024/ice+frost-1024x1024.jpg";
 
   image.addEventListener("load", () => {
-    const texture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, texture);
+    texture1 = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture1);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
-    draw();
   });
 };
 
-const pressW = () => {
-  texturePoint.y += 0.5;
-  reDraw();
-};
+function getWebcam() {
+  navigator.getUserMedia(
+    { video: true, audio: false },
+    function (stream) {
+      video.srcObject = stream;
+    },
+    function (e) {
+      console.error("Rejected!", e);
+    }
+  );
+}
 
-const pressS = () => {
-  texturePoint.y -= 0.5;
-  reDraw();
-};
-
-const pressA = () => {
-  texturePoint.x -= 0.5;
-  reDraw();
-};
-
-const pressD = () => {
-  texturePoint.x += 0.5;
-  reDraw();
-};
-
-const left = () => {
-  handlePosition -= 0.07;
-  reDraw();
-};
-
-const right = () => {
-  handlePosition += 0.07;
-  reDraw();
-};
-
-const lightCoordinates = () => {
-  let coord = Math.sin(handlePosition) * 1.2;
-  return [coord, -2, coord * coord];
-};
-
-window.addEventListener("keydown", function (event) {
-  switch (event.code) {
-    case "ArrowLeft":
-      left();
-      break;
-    case "ArrowRight":
-      right();
-      break;
-    case "KeyW":
-      pressW();
-      break;
-    case "KeyS":
-      pressS();
-      break;
-    case "KeyD":
-      pressD();
-      break;
-    case "KeyA":
-      pressA();
-      break;
-    default:
-      return;
-  }
-});
+function CreateWebCamTexture() {
+  let textureID = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, textureID);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return textureID;
+}
